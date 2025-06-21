@@ -1,32 +1,42 @@
 # nlp_to_sql.py
-# Converts a natural language query to an SQL statement using the Gemini API.
+# This module converts a natural language query into an intelligent SQL statement.
 
 import requests
 import json
 from config import GEMINI_API_KEY
 
 def convert_nlp_to_sql(user_query, schema):
-    """Converts a natural language query to SQL using the Gemini API."""
+    """
+    Converts a natural language query to SQL, deciding whether to use the
+    'final' table or join the source tables.
+    """
     prompt = f"""
-    You are an expert SQL query generator for an e-commerce database.
-    Your main task is to create a query that MERGES information from multiple tables based on the user's request.
-    Convert the following natural language query into a single, executable SQLite statement.
+    You are an intelligent SQL query generator for a hybrid database system.
+    Your job is to decide the most efficient way to answer the user's query.
 
+    Here is the database schema:
     {schema}
 
-    Rules:
-    1. Generate ONLY the SQL query, without any explanations or markdown.
-    2. ALWAYS use JOINs to connect tables like customers, orders, order_items, and products as needed to answer the query.
-    3. Use the LIKE operator for case-insensitive text matching in SQLite.
-    4. For safety, return only SELECT statements.
-    5. Use clear and readable table aliases (e.g., c for customers, p for products).
+    *** YOUR TASK ***
+    Based on the user's query and the table descriptions, generate a single, executable SQLite query.
+
+    *** DECISION LOGIC ***
+    1.  **Check the 'final' table first.** If all the information the user is asking for (e.g., customer names, product categories, order dates) is available in the 'final' table, write a SIMPLE query against ONLY the 'final' table. This is the preferred, fastest method.
+    2.  **If information is missing from 'final'**, then and only then, write a query that JOINS the necessary raw source tables (e.g., customers, products, reviews, etc.) to get the answer.
+
+    *** EXAMPLES ***
+    -   If the user asks "Show orders for Alice Johnson", you should query the 'final' table: `SELECT * FROM final WHERE customer_name = 'Alice Johnson';`
+    -   If the user asks "Show all reviews for the Pro-Grade Laptop", you must join `reviews` and `products` because 'reviews' data is not in the 'final' table: `SELECT r.rating, r.comment FROM reviews r JOIN products p ON r.product_id = p.product_id WHERE p.name = 'Pro-Grade Laptop';`
+
+    *** RULES ***
+    -   Generate ONLY the raw SQL query. No explanations, no markdown.
+    -   Use `LIKE` for case-insensitive string matching.
 
     Natural Language Query: {user_query}
 
     SQL Query:
     """
     try:
-        # Note: Using Gemini 1.5 Flash for speed and accuracy
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
         data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -35,9 +45,13 @@ def convert_nlp_to_sql(user_query, schema):
         response.raise_for_status()
 
         result = response.json()
-        sql_query = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        
+        if 'candidates' in result and result['candidates']:
+            sql_query = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        else:
+            print("✗ Error: Gemini API did not return any candidates.")
+            return None
 
-        # Clean up potential markdown formatting
         if sql_query.startswith('```sql'):
             sql_query = sql_query[6:]
         if sql_query.endswith('```'):
@@ -46,5 +60,5 @@ def convert_nlp_to_sql(user_query, schema):
         return sql_query.strip()
 
     except Exception as e:
-        print(f"✗ Error calling Gemini API: {e}")
+        print(f"✗ An unexpected error occurred in nlp_to_sql: {e}")
         return None
